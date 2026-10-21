@@ -1,46 +1,164 @@
 import Phaser from 'phaser';
-import {Simulation,definitions,labels,SIZE,save,load,type Kind,type Resource,type Entity} from './simulation';
+import { Simulation, definitions, labels, SIZE, save, load, crops, resourceKeys, volume,
+  type Kind, type Resource, type Entity, type Crop } from './simulation';
+import { meters } from './indicators';
+import { drawWorld, drawSelection, footprint } from './renderer';
 import './style.css';
-const sim=new Simulation();try{const s=load();if(s)sim.state=s;}catch{sim.message='Сохранение повреждено. Начата новая игра.';}
-let level=0,speed=1,tool='select',selected:Entity|undefined,scene:World;
+const sim = new Simulation();
+let autosaveEnabled = true;
+try { const state = load(); if (state) sim.state = state; }
+catch { autosaveEnabled = false; sim.message = 'Сохранение повреждено. Автосохранение отключено: исходные данные сохранены. Ручное сохранение создаст резервную копию.'; }
+let level = 0, speed = 1, tool = 'select', rotation: 0 | 1 = 0;
+let selected: Entity | undefined, scene: World;
 const app=document.querySelector<HTMLDivElement>('#app')!;
-app.innerHTML=`<header><div class="brand"><span class="brandmark">а</span><div>АВТОНОМИЯ<small>ТИХАЯ ЖИЗНЬ СИСТЕМ</small></div></div><div id="resources"></div><button id="save">Сохранить <span>↗</span></button><button id="load">Загрузить</button></header><div class="workspace"><aside class="build"><div class="eyebrow">ВАШЕ ХОЗЯЙСТВО</div><h1>Всё начинается<br>с маленького.</h1><p class="muted">Стройте связи.<br>Пусть хозяйство работает само.</p><div class="tabs"><button data-tool="select" class="active">↖ Выбор</button><button data-tool="gather">⚒ Добыча</button><button data-tool="remove">⌫ Снос</button></div><h3>ПОСТРОЙКИ <span>08</span></h3><div id="catalog"></div><div class="hint"><b>Первая цепочка</b><p>Склад → грядка → водосборник.<br>Ставьте вплотную или соединяйте конвейерами. Кормушка рядом с курятником снабжает кур.</p></div></aside><main><div class="mapbar"><div><span class="live"></span> ДОЛИНА № 01 <span class="muted">/ 64 × 64</span></div><div class="levels"><button id="surface" class="active">0 · Поверхность</button><button id="underground">−1 · Подземелье</button></div></div><div id="game"></div><div class="mapfooter"><span>WASD / стрелки — камера · колесо — масштаб · Esc — выбор</span><button id="center">⌖ К центру</button><span id="coords">32 : 32</span></div><div class="timebar"><div><span class="sun">☀</span><b id="clock"></b><span id="daylight" class="muted"></span></div><div class="speeds"><button data-speed="0">Ⅱ</button><button data-speed="1" class="active">×1</button><button data-speed="2">×2</button><button data-speed="4">×4</button></div></div></main><aside class="details"><div class="eyebrow">ОБЗОР ХОЗЯЙСТВА</div><h2>Своя экосистема</h2><div class="stat"><span>Построек</span><b id="count">0</b></div><div class="stat"><span>В сети склада</span><b id="linked">0</b></div><div class="separator"></div><div id="selection"></div><div class="guide"><div class="eyebrow">ПОЛЕВЫЕ ЗАМЕТКИ</div><p>01 <b>Свет даёт жизнь</b><br>Растения растут днём. Под землёй установите светильник.</p><p>02 <b>Ничего лишнего</b><br>Навоз → компост → удобрение → быстрый урожай.</p><p>03 <b>Расширяйте границы</b><br>В режиме добычи раскапывайте стены подземелья за 2 дерева.</p></div></aside></div><div id="toast"></div>`;
-const catalog=document.querySelector('#catalog')!;
-for(const [kind,d]of Object.entries(definitions)){const b=document.createElement('button');b.className='building';b.dataset.tool=kind;b.innerHTML=`<span class="building-icon">${d.icon}</span><span><b>${d.name}</b><small>${Object.entries(d.cost).map(([k,n])=>`${n} ${labels[k as Resource].toLowerCase()}`).join(' · ')}</small></span><span class="plus">+</span>`;b.title=d.description;catalog.append(b);}
-function setTool(t:string){tool=t;document.querySelectorAll('[data-tool]').forEach(b=>b.classList.toggle('active',(b as HTMLElement).dataset.tool===t));}
-document.querySelectorAll<HTMLElement>('[data-tool]').forEach(b=>b.onclick=()=>setTool(b.dataset.tool!));
-document.querySelectorAll<HTMLElement>('[data-speed]').forEach(b=>b.onclick=()=>{speed=Number(b.dataset.speed);document.querySelectorAll('[data-speed]').forEach(a=>a.classList.toggle('active',a===b));});
-function changeLevel(l:number){level=l;selected=undefined;document.querySelector('#surface')!.classList.toggle('active',l===0);document.querySelector('#underground')!.classList.toggle('active',l===1);scene?.draw();refresh();}
-(document.querySelector('#surface')as HTMLElement).onclick=()=>changeLevel(0);(document.querySelector('#underground')as HTMLElement).onclick=()=>changeLevel(1);
-(document.querySelector('#save')as HTMLElement).onclick=()=>{try{save(sim);sim.message='Хозяйство сохранено в этом браузере.';}catch{sim.message='Не удалось сохранить: хранилище браузера недоступно.';}notify();};
-(document.querySelector('#load')as HTMLElement).onclick=()=>{try{const s=load();if(!s){sim.message='Сохранений пока нет.';}else{sim.state=s;selected=undefined;sim.message='Хозяйство загружено.';scene.draw();refresh();}}catch{sim.message='Не удалось загрузить сохранение.';}notify();};
-(document.querySelector('#center')as HTMLElement).onclick=()=>scene.cameras.main.centerOn(32*24,32*24);
-function notify(){const t=document.querySelector('#toast')!;t.textContent=sim.message;t.classList.add('visible');window.setTimeout(()=>t.classList.remove('visible'),3200);}
-function status(e:Entity){if(e.kind==='bed')return !e.planted?'Ожидает посадки':e.progress>=60?'Урожай созрел':!sim.light(e)?'Недостаточно света':e.stock.water<.1?'Нужна вода':`Растёт · ${Math.floor(e.progress/60*100)}%`;if(e.kind==='coop')return e.stock.food<.1||e.stock.water<.1?'Нужны корм и вода':`Куры сыты · здоровье ${Math.floor(e.health)}%`;if(e.kind==='composter')return e.stock.manure<3?'Нужно 3 навоза':`Переработка · ${Math.floor(e.progress/18*100)}%`;return sim.connected().has(e.id)?'Подключено к складу':'Автономный объект';}
-function refresh(){document.querySelector('#resources')!.innerHTML=(Object.keys(labels)as Resource[]).map(k=>`<div class="resource"><small>${labels[k]}</small><b>${Math.floor(sim.state.resources[k])}</b></div>`).join('');const min=Math.floor(sim.state.time%1440);document.querySelector('#clock')!.textContent=`День ${Math.floor(sim.state.time/1440)+1} · ${String(Math.floor(min/60)).padStart(2,'0')}:${String(min%60).padStart(2,'0')}`;document.querySelector('#daylight')!.textContent=min>=360&&min<1200?'Световой день':'Ночь';document.querySelector('#count')!.textContent=String(sim.state.entities.length);document.querySelector('#linked')!.textContent=String(sim.connected().size);
-const box=document.querySelector('#selection')!;
-if(selected&&!sim.state.entities.includes(selected))selected=undefined;
-if(selected){const e=selected,d=definitions[e.kind];box.innerHTML=`<div class="eyebrow">ВЫБРАННЫЙ ОБЪЕКТ · ${e.x}, ${e.y}</div><div class="object-icon">${d.icon}</div><h2>${d.name}</h2><div class="status">${status(e)}</div><p class="muted">${d.description}</p>${Object.entries(e.stock).filter(([,n])=>n>=.1).map(([k,n])=>`<div class="stat"><span>${labels[k as Resource]}</span><b>${n.toFixed(1)}</b></div>`).join('')}<button class="primary" id="action">${e.kind==='bed'?(e.progress>=60?'Собрать урожай':'Посадить / полить'):['feeder','coop','composter'].includes(e.kind)?'Пополнить запасы':'Забрать продукцию'}</button>${['coop','composter'].includes(e.kind)?'<button id="collect">Забрать продукцию</button>':''}<small class="muted">Производственных циклов: ${e.cycles}</small>`;
-(document.querySelector('#action')as HTMLElement).onclick=()=>{sim.interact(e);notify();refresh();};const c=document.querySelector('#collect')as HTMLElement|null;if(c)c.onclick=()=>{sim.collect(e);notify();refresh();};
-}else box.innerHTML='<div class="empty-icon">⌖</div><h2>Место для ваших идей</h2><p class="muted">Выберите постройку на карте, чтобы увидеть её состояние и управлять производством.</p><div class="status">● Хозяйство начинается с вас</div>';
-document.querySelectorAll<HTMLElement>('.building').forEach(b=>b.classList.toggle('unaffordable',!sim.afford(definitions[b.dataset.tool as Kind].cost)));
+app.innerHTML=`<header><div class="brand"><span class="brandmark">а</span><div>АВТОНОМИЯ<small>v0.2 · ВОЗРОЖДЕНИЕ</small></div></div><div id="resources"></div><button id="save">Сохранить <span>↗</span></button><button id="load">Загрузить</button></header><div class="workspace"><aside class="build"><div class="eyebrow">АВТОНОМНЫЙ КОМПЛЕКС</div><h1>Жизнь после<br>тишины.</h1><p class="muted">Восстановите почву.<br>Замкните круг ресурсов.</p><div class="tabs"><button data-tool="select" class="active">↖ Выбор</button><button data-tool="gather">⚒ Добыча</button><button data-tool="remove">⌫ Снос</button></div><h3>ПОСТРОЙКИ <span>10</span></h3><div id="build-mode"></div><div id="catalog"></div><div class="hint"><b>Первая цепочка</b><p>Склад → «Перенести стартовые запасы» → грядки и резервуар.<br>Соединяйте сторонами или конвейерами. Насосам и лампам нужен генератор.</p></div></aside><main><div class="mapbar"><div><span class="live"></span> СЕКТОР ВОЗРОЖДЕНИЯ <span class="muted">/ 64 × 64</span></div><div class="levels"><button id="surface" class="active">0 · Поверхность</button><button id="underground">−1 · Подземелье</button></div></div><div id="game"></div><div class="mapfooter"><span>WASD / стрелки — камера · колесо — масштаб · R — поворот · Esc — отмена</span><button id="center">⌖ К центру</button><span id="coords">32 : 32</span></div><div class="timebar"><div><span class="sun">☀</span><b id="clock"></b><span id="daylight" class="muted"></span></div><div class="speeds"><button data-speed="0">Ⅱ</button><button data-speed="1" class="active">×1</button><button data-speed="2">×2</button><button data-speed="4">×4</button></div></div></main><aside class="details"><div class="eyebrow">ОБЗОР ХОЗЯЙСТВА</div><h2>Контур жизни</h2><div class="stat"><span>Построек</span><b id="count">0</b></div><div class="stat"><span>В сети склада</span><b id="linked">0</b></div><div id="depot" class="muted"></div><div class="separator"></div><div id="selection"></div><div class="guide"><div class="eyebrow">ПОЛЕВЫЕ ЗАМЕТКИ</div><p>01 <b>Свет даёт жизнь</b><br>Растения растут днём. Под землёй нужны светильник и генератор.</p><p>02 <b>Ничего лишнего</b><br>Корм → куры → навоз → компост → новый урожай.</p><p>03 <b>Расширяйте границы</b><br>В режиме добычи раскапывайте стены подземелья за 2 дерева. Снос возвращает материалы.</p></div></aside></div><div id="toast"></div>`;
+const catalog = document.querySelector('#catalog')!;
+for (const category of [...new Set(Object.values(definitions).map(d => d.category))]) {
+  const heading = document.createElement('div'); heading.className = 'category'; heading.textContent = category; catalog.append(heading);
+  for (const [kind, d] of Object.entries(definitions).filter(([, d]) => d.category === category)) {
+    const b = document.createElement('button'); b.className = 'building'; b.dataset.tool = kind;
+    b.innerHTML = `<span class="building-icon">${d.icon}</span><span><b>${d.name} <em>${d.width}×${d.height}</em></b><small>${Object.entries(d.cost).map(([k, n]) => `${n} ${labels[k as Resource].toLowerCase()}`).join(' · ')}</small></span><span class="plus">+</span>`;
+    b.title = `${d.width}×${d.height} клеток. ${d.description}`; catalog.append(b);
+  }
 }
-const colors:Record<Kind,number>={bed:0x946947,tank:0x638eae,feeder:0xd7ab64,coop:0xd9b98c,composter:0x8c9e67,warehouse:0xb1875e,pipe:0xb0b5a1,lamp:0xf8de8b};
+function setTool(t: string) {
+  tool = t; rotation = 0;
+  document.querySelectorAll('[data-tool]').forEach(b => b.classList.toggle('active', (b as HTMLElement).dataset.tool === t));
+  updateBuildMode();
+}
+function updateBuildMode() {
+  const box = document.querySelector('#build-mode')!;
+  if (Object.hasOwn(definitions, tool)) {
+    const d = definitions[tool as Kind];
+    box.innerHTML = `<div class="build-summary">${d.name} · ${rotation ? d.height : d.width}×${rotation ? d.width : d.height}<br><small>R — поворот · зелёный контур — можно</small><button id="cancel">Отменить · Esc</button></div>`;
+    (document.querySelector('#cancel') as HTMLElement).onclick = () => setTool('select');
+  } else box.innerHTML = '';
+}
+document.querySelectorAll<HTMLElement>('[data-tool]').forEach(b => b.onclick = () => setTool(b.dataset.tool!));
+document.querySelectorAll<HTMLElement>('[data-speed]').forEach(b => b.onclick = () => {
+  speed = Number(b.dataset.speed); document.querySelectorAll('[data-speed]').forEach(a => a.classList.toggle('active', a === b));
+});
+function changeLevel(l: number) {
+  level = l; selected = undefined;
+  document.querySelector('#surface')!.classList.toggle('active', l === 0);
+  document.querySelector('#underground')!.classList.toggle('active', l === 1);
+  scene?.draw(); refresh();
+}
+(document.querySelector('#surface') as HTMLElement).onclick = () => changeLevel(0);
+(document.querySelector('#underground') as HTMLElement).onclick = () => changeLevel(1);
+(document.querySelector('#save') as HTMLElement).onclick = () => {
+  try {
+    if (!autosaveEnabled) { const previous = localStorage.getItem('avtonomiya-v1'); if (previous) localStorage.setItem('avtonomiya-corrupt-backup', previous); }
+    save(sim); autosaveEnabled = true; sim.message = 'Комплекс сохранён в этом браузере.';
+  }
+  catch { sim.message = 'Не удалось сохранить: хранилище браузера недоступно.'; } notify();
+};
+(document.querySelector('#load') as HTMLElement).onclick = () => {
+  try {
+    const state = load();
+    if (!state) sim.message = 'Сохранений пока нет.';
+    else { sim.state = state; autosaveEnabled = true; selected = undefined; sim.message = 'Комплекс загружен. Старые здания сохраняют размер 1×1.'; scene.draw(); refresh(); }
+  } catch { autosaveEnabled = false; sim.message = 'Сохранение не прошло проверку. Текущая игра не изменена, автосохранение отключено.'; } notify();
+};
+(document.querySelector('#center') as HTMLElement).onclick = () => scene.cameras.main.centerOn(32 * 24, 32 * 24);
+let toastTimer: number | undefined;
+function notify() {
+  const t = document.querySelector('#toast')!; t.textContent = sim.message; t.classList.add('visible');
+  window.clearTimeout(toastTimer); toastTimer = window.setTimeout(() => t.classList.remove('visible'), 4000);
+}
+function act(id: string, fn: () => void) {
+  const b = document.getElementById(id); if (b) b.onclick = () => { fn(); notify(); scene.draw(); refresh(true); };
+}
+function selectionPanel(e: Entity) {
+  const d = definitions[e.kind], box = document.querySelector('#selection')!;
+  const rate = e.kind === 'bed' ? sim.growthRate(e) : 0;
+  const eta = e.stage === 'ripe' ? 'Готово к уборке' : rate > 0 ? `≈ ${Math.ceil((crops[e.crop].duration - e.progress) / rate)} с до урожая на ×1` : 'Ожидает подходящих условий';
+  box.innerHTML = `<div class="eyebrow">ОБЪЕКТ #${e.id} · ${e.x}, ${e.y} · ${e.width}×${e.height}${e.legacy ? ' · v0.1' : ''}</div>
+    <div class="object-heading"><span>${d.icon}</span><h2>${d.name}</h2></div>
+    <div class="status ${sim.critical(e) ? 'critical' : ''}">${sim.reason(e)}</div>
+    <p class="muted">${d.description}</p>
+    ${meters(e, sim).map(m => `<div class="meter ${m.tone}" title="${m.hint}"><div><span>${m.label}</span><b>${m.value.toFixed(m.unit === 'кВт' ? 0 : 1)} / ${m.max} ${m.unit}</b></div><div class="track"><i style="width:${Math.max(0, Math.min(100, m.value / m.max * 100))}%"></i></div></div>`).join('')}
+    ${e.kind === 'bed' ? `<label class="field">Культура <select id="crop" ${e.planted ? 'disabled' : ''}>${Object.entries(crops).map(([k, c]) => `<option value="${k}" ${e.crop === k ? 'selected' : ''}>${c.name} · ${c.duration} с</option>`).join('')}</select></label><p class="muted">${eta}<br>Температура: ${(e.level ? 16 : sim.temperature()).toFixed(1)} °C · ${sim.light(e) ? 'есть свет' : 'нет света'}<br>Удобрение: ${e.fertilized ? 'внесено · ×1,7' : 'не внесено'}</p><label class="toggle"><input id="auto-harvest" type="checkbox" ${e.autoHarvest ? 'checked' : ''}> Автосбор и повторный посев</label>` : ''}
+    ${['bed', 'coop', 'feeder', 'composter', 'generator', 'tank'].includes(e.kind) ? `<label class="toggle"><input id="auto-supply" type="checkbox" ${e.autoSupply ? 'checked' : ''}> Автоснабжение из своей сети</label>` : ''}
+    ${e.kind === 'warehouse' ? `<div class="eyebrow">ПРИНИМАТЬ РЕСУРСЫ</div><div class="filters">${resourceKeys.map(k => `<label title="Запрет не удаляет уже хранящиеся ресурсы"><input data-filter="${k}" type="checkbox" ${e.allowed.includes(k) ? 'checked' : ''}>${labels[k]}</label>`).join('')}</div><button class="primary" id="transfer">Перенести стартовые запасы</button>` : ''}
+    ${['bed', 'coop', 'feeder', 'composter', 'generator', 'tank'].includes(e.kind) ? `<button class="primary" id="action">${e.kind === 'bed' ? e.stage === 'ripe' ? 'Собрать урожай' : e.planted ? 'Полить / удобрить вручную' : 'Посеять и полить · 1 семя' : 'Пополнить вручную'}</button>` : ''}
+    ${e.kind === 'bed' && e.planted ? '<button id="clear-crop">Убрать посев без урожая</button>' : ''}
+    ${['bed', 'coop', 'composter', 'tank', 'pump'].includes(e.kind) ? '<button id="collect">Забрать готовую продукцию</button>' : ''}
+    <div class="inventory"><div class="eyebrow">ЗАПАСЫ ПО ВИДАМ</div>${Object.entries(e.stock).filter(([, n]) => n > .01).map(([k, n]) => `<div class="stat"><span>${labels[k as Resource]}</span><b>${n.toFixed(1)} ед.</b></div>`).join('') || '<p class="muted">Пока пусто</p>'}</div>
+    <small class="muted">Завершённых циклов: ${e.cycles}</small>`;
+  act('action', () => { sim.interact(e); }); act('collect', () => { sim.collect(e); });
+  act('transfer', () => { sim.transferDepot(e); }); act('clear-crop', () => { sim.clearCrop(e); });
+  const crop = document.querySelector<HTMLSelectElement>('#crop');
+  if (crop) crop.onchange = () => { sim.setCrop(e, crop.value as Crop); refresh(true); };
+  const harvest = document.querySelector<HTMLInputElement>('#auto-harvest'); if (harvest) harvest.onchange = () => { e.autoHarvest = harvest.checked; harvest.blur(); };
+  const supply = document.querySelector<HTMLInputElement>('#auto-supply'); if (supply) supply.onchange = () => { e.autoSupply = supply.checked; supply.blur(); };
+  document.querySelectorAll<HTMLInputElement>('[data-filter]').forEach(input => input.onchange = () => {
+    const k = input.dataset.filter as Resource; e.allowed = e.allowed.filter(a => a !== k); if (input.checked) e.allowed.push(k); input.blur();
+  });
+}
+function refresh(force = false) {
+  const total = sim.totals();
+  document.querySelector('#resources')!.innerHTML = resourceKeys.map(k => `<div class="resource" title="${labels[k]}: стартовый контейнер и склады; внутренние запасы машин учитываются в их панелях"><small>${labels[k]}</small><b>${Math.floor(total[k])}</b></div>`).join('');
+  const min = Math.floor(sim.state.time % 1440);
+  document.querySelector('#clock')!.textContent = `День ${Math.floor(sim.state.time / 1440) + 1} · ${String(Math.floor(min / 60)).padStart(2, '0')}:${String(min % 60).padStart(2, '0')}`;
+  document.querySelector('#daylight')!.textContent = `${min >= 360 && min < 1200 ? 'День' : 'Ночь'} · ${sim.temperature().toFixed(0)} °C`;
+  document.querySelector('#count')!.textContent = String(sim.state.entities.length);
+  document.querySelector('#linked')!.textContent = String(sim.connected().size);
+  document.querySelector('#depot')!.textContent = `Стартовый контейнер: ${volume(sim.state.resources).toFixed(0)} / ${sim.state.baseCapacity} ед. · Перенесите запасы на склад для автоматики.`;
+  if (selected && !sim.state.entities.includes(selected)) selected = undefined;
+  const box = document.querySelector('#selection')!;
+  // Preserve an open culture dropdown or a keyboard-focused control during simulation updates.
+  if (force || !box.contains(document.activeElement)) {
+    if (selected) selectionPanel(selected);
+    else box.innerHTML = '<div class="empty-icon">⌖</div><h2>Вернуть жизнь</h2><p class="muted">Выберите объект, чтобы увидеть его запасы и причины остановки. Начните со склада 3×3 и перенесите в него стартовые ресурсы.</p><div class="status">Сухая земля может стать зелёной</div>';
+  }
+  document.querySelectorAll<HTMLElement>('.building').forEach(b => b.classList.toggle('unaffordable', !sim.afford(definitions[b.dataset.tool as Kind].cost)));
+}
 class World extends Phaser.Scene {
- g!:Phaser.GameObjects.Graphics; overlay!:Phaser.GameObjects.Graphics; keys!:Record<string,Phaser.Input.Keyboard.Key>; elapsed=0;auto=0;
- create(){scene=this;this.g=this.add.graphics();this.overlay=this.add.graphics();this.cameras.main.setBounds(0,0,SIZE*24,SIZE*24);this.cameras.main.setZoom(1.4);this.cameras.main.centerOn(32*24,32*24);this.keys=this.input.keyboard!.addKeys('W,A,S,D,UP,DOWN,LEFT,RIGHT,ESC') as Record<string,Phaser.Input.Keyboard.Key>;
- this.input.on('wheel',(_p:unknown,_o:unknown,_dx:number,dy:number)=>{const c=this.cameras.main;c.setZoom(Phaser.Math.Clamp(c.zoom-dy*.001,0.5,3));});
- this.input.on('pointerdown',(p:Phaser.Input.Pointer)=>{if(p.button!==0)return;const pt=this.cameras.main.getWorldPoint(p.x,p.y),x=Math.floor(pt.x/24),y=Math.floor(pt.y/24);if(x<0||y<0||x>=64||y>=64)return;
- if(tool==='select'){selected=sim.at(x,y,level);}else if(tool==='gather'){sim.gather(x,y,level);notify();}else if(tool==='remove'){sim.remove(x,y,level);selected=undefined;notify();}else {sim.build(tool as Kind,x,y,level);notify();}this.draw();refresh();});this.draw();refresh();}
- draw(){const g=this.g;g.clear();const night=sim.state.time%1440<360||sim.state.time%1440>=1200;
- for(let y=0;y<SIZE;y++)for(let x=0;x<SIZE;x++){const t=sim.tile(x,y,level)!,px=x*24,py=y*24;g.fillStyle(level? t.terrain==='wall'?0x333c3b:0x797669:((x*17+y*13)%7<3?0xa6b98c:0xa1b487));g.fillRect(px,py,24,24);g.lineStyle(1,0x52664c,.09);g.strokeRect(px,py,24,24);
- if(t.terrain==='water'){g.fillStyle(0x79a9b0);g.fillRect(px,py,24,24);g.lineStyle(1,0xbad8cf,.6);g.lineBetween(px+5,py+12,px+17,py+12);}if(t.terrain==='tree'){g.fillStyle(0x667e54,.25);g.fillEllipse(px+14,py+19,22,10);g.fillStyle(0x7c6850);g.fillRect(px+10,py+12,4,10);g.fillStyle(0x466b4b);g.fillCircle(px+12,py+9,9);g.fillStyle(0x5b8054);g.fillCircle(px+9,py+6,6);}if(t.terrain==='rock'){g.fillStyle(0x7f8980);g.fillRoundedRect(px+4,py+7,17,13,4);g.fillStyle(0xa5ada0);g.fillTriangle(px+5,py+9,px+12,py+5,px+18,py+12);}}
- const net=sim.connected();for(const e of sim.state.entities.filter(a=>a.level===level)){const x=e.x*24,y=e.y*24;g.fillStyle(0x324736,.2);g.fillRoundedRect(x+3,y+5,21,20,3);g.fillStyle(colors[e.kind]);g.fillRoundedRect(x+2,y+2,20,20,3);g.lineStyle(1,0x404c3b,.5);g.strokeRoundedRect(x+2,y+2,20,20,3);
- if(e.kind==='bed'){g.lineStyle(2,0x684c34);for(let i=6;i<22;i+=5)g.lineBetween(x+4,y+i,x+20,y+i);if(e.planted){g.fillStyle(e.progress>=60?0xe7cd6b:0x79a45b);for(let a=7;a<22;a+=7)for(let b=7;b<22;b+=7)g.fillCircle(x+a,y+b,2+e.progress/30);}}
- if(e.kind==='warehouse'||e.kind==='coop'){g.fillStyle(e.kind==='warehouse'?0x725a48:0x9f6952);g.fillTriangle(x+1,y+10,x+12,y+1,x+23,y+10);g.fillStyle(0x4d5544);g.fillRect(x+10,y+13,5,9);if(e.kind==='coop'){g.fillStyle(0xfff0c5);g.fillCircle(x+6,y+17,3);g.fillStyle(0xd17b4b);g.fillCircle(x+6,y+14,1);}}
- if(e.kind==='tank'){g.fillStyle(0xaccbd0);g.fillEllipse(x+12,y+7,16,7);g.fillStyle(0x4e899f);g.fillEllipse(x+12,y+9,12,5);}if(e.kind==='pipe'){g.lineStyle(5,0x727f70);g.lineBetween(x,y+12,x+24,y+12);g.lineBetween(x+12,y,x+12,y+24);}if(e.kind==='feeder'){g.fillStyle(0x775b3e);g.fillRect(x+5,y+8,14,9);g.fillStyle(0xe8ca7b);g.fillRect(x+7,y+10,10,4);}if(e.kind==='composter'){g.lineStyle(2,0x546441);for(let i=7;i<22;i+=5)g.lineBetween(x+3,y+i,x+21,y+i);}if(e.kind==='lamp'){g.fillStyle(0xffe8a2,.18);g.fillCircle(x+12,y+12,90);g.fillStyle(0xffedb3);g.fillCircle(x+12,y+10,5);}if(net.has(e.id)){g.fillStyle(0xd7e8ac);g.fillCircle(x+20,y+4,2);}}
- if(night&&level===0){g.fillStyle(0x172744,.28);g.fillRect(0,0,1536,1536);}}
- update(_t:number,delta:number){const dt=Math.min(delta/1000,.1),c=this.cameras.main,k=this.keys;if(!k)return;const v=420*dt/c.zoom;c.scrollX+=((k.D.isDown||k.RIGHT.isDown?1:0)-(k.A.isDown||k.LEFT.isDown?1:0))*v;c.scrollY+=((k.S.isDown||k.DOWN.isDown?1:0)-(k.W.isDown||k.UP.isDown?1:0))*v;if(k.ESC.isDown)setTool('select');sim.tick(dt*speed);this.elapsed+=dt;this.auto+=dt;if(this.elapsed>.3){this.draw();refresh();this.elapsed=0;}if(this.auto>30){try{save(sim);}catch{/* Manual save reports storage errors. */}this.auto=0;}
- const p=this.input.activePointer,pt=c.getWorldPoint(p.x,p.y),x=Math.floor(pt.x/24),y=Math.floor(pt.y/24);this.overlay.clear();if(x>=0&&y>=0&&x<64&&y<64){this.overlay.lineStyle(2,tool==='remove'?0xe09875:0xf9f5d5,.9);this.overlay.strokeRect(x*24,y*24,24,24);document.querySelector('#coords')!.textContent=`${x} : ${y}`;}if(selected){this.overlay.lineStyle(2,0xfff1a8);this.overlay.strokeRect(selected.x*24-1,selected.y*24-1,26,26);}}
+  g!: Phaser.GameObjects.Graphics; overlay!: Phaser.GameObjects.Graphics;
+  keys!: Record<string, Phaser.Input.Keyboard.Key>; elapsed = 0; auto = 0;
+  create() {
+    scene = this; this.g = this.add.graphics(); this.overlay = this.add.graphics();
+    this.cameras.main.setBounds(0, 0, SIZE * 24, SIZE * 24); this.cameras.main.setZoom(1.4); this.cameras.main.centerOn(32 * 24, 32 * 24);
+    this.keys = this.input.keyboard!.addKeys('W,A,S,D,UP,DOWN,LEFT,RIGHT,ESC,R') as Record<string, Phaser.Input.Keyboard.Key>;
+    this.input.keyboard!.on('keydown-R', (event: KeyboardEvent) => {
+      if (!event.repeat && !['INPUT', 'SELECT', 'TEXTAREA'].includes(document.activeElement?.tagName ?? '') && Object.hasOwn(definitions, tool)) { rotation = rotation ? 0 : 1; updateBuildMode(); }
+    });
+    this.input.keyboard!.on('keydown-ESC', () => setTool('select'));
+    this.input.on('wheel', (_p: unknown, _o: unknown, _dx: number, dy: number) => { const c = this.cameras.main; c.setZoom(Phaser.Math.Clamp(c.zoom - dy * .001, .5, 3)); });
+    this.input.on('pointerdown', (p: Phaser.Input.Pointer) => {
+      if (p.button !== 0) return;
+      const pt = this.cameras.main.getWorldPoint(p.x, p.y), x = Math.floor(pt.x / 24), y = Math.floor(pt.y / 24);
+      if (x < 0 || y < 0 || x >= SIZE || y >= SIZE) return;
+      if (tool === 'select') selected = sim.at(x, y, level);
+      else if (tool === 'gather') { sim.gather(x, y, level); notify(); }
+      else if (tool === 'remove') { if (sim.remove(x, y, level)) selected = undefined; notify(); }
+      else { sim.build(tool as Kind, x, y, level, rotation); notify(); }
+      this.draw(); refresh(true);
+    }); this.draw(); refresh(); if (!autosaveEnabled) notify();
+  }
+  draw() { drawWorld(this.g, sim, level); }
+  update(_time: number, delta: number) {
+    const dt = Math.min(delta / 1000, .25), c = this.cameras.main, k = this.keys; if (!k) return;
+    const focus = document.activeElement?.tagName;
+    if (!['INPUT', 'SELECT', 'TEXTAREA'].includes(focus ?? '')) {
+      const v = 420 * dt / c.zoom;
+      c.scrollX += ((k.D.isDown || k.RIGHT.isDown ? 1 : 0) - (k.A.isDown || k.LEFT.isDown ? 1 : 0)) * v;
+      c.scrollY += ((k.S.isDown || k.DOWN.isDown ? 1 : 0) - (k.W.isDown || k.UP.isDown ? 1 : 0)) * v;
+    }
+    sim.tick(dt * speed); this.elapsed += dt; this.auto += dt;
+    if (this.elapsed > .3) { this.draw(); refresh(); this.elapsed = 0; }
+    if (this.auto > 30) { try { if (autosaveEnabled) save(sim); } catch { /* Manual save reports errors. */ } this.auto = 0; }
+    const p = this.input.activePointer, pt = c.getWorldPoint(p.x, p.y), x = Math.floor(pt.x / 24), y = Math.floor(pt.y / 24);
+    this.overlay.clear(); const inside = p.x >= 0 && p.y >= 0 && p.x < c.width && p.y < c.height && x >= 0 && y >= 0 && x < SIZE && y < SIZE;
+    const hovered = inside ? sim.at(x, y, level) : undefined;
+    drawSelection(this.overlay, sim, selected, hovered, level);
+    if (inside) {
+      if (Object.hasOwn(definitions, tool)) footprint(this.overlay, sim, tool as Kind, x, y, level, rotation);
+      else if (tool !== 'select') { this.overlay.lineStyle(2, tool === 'remove' ? 0xe08f6e : 0xe7d5a1); this.overlay.strokeRect(x * 24, y * 24, 24, 24); }
+      document.querySelector('#coords')!.textContent = `${x} : ${y}${hovered ? ' · ' + sim.reason(hovered) : ''}`;
+    }
+  }
 }
-new Phaser.Game({type:Phaser.AUTO,parent:'game',backgroundColor:'#a1b487',scene:World,scale:{mode:Phaser.Scale.RESIZE,width:'100%',height:'100%'},render:{antialias:true},input:{mouse:{preventDefaultWheel:true}}});
+new Phaser.Game({ type: Phaser.AUTO, parent: 'game', backgroundColor: '#81755f', scene: World,
+  scale: { mode: Phaser.Scale.RESIZE, width: '100%', height: '100%' }, render: { antialias: true }, input: { mouse: { preventDefaultWheel: true } } });
