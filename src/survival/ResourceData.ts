@@ -1,23 +1,27 @@
+import { BALANCE } from './balance';
+import type { ClockState } from './GameClock';
+import type { Vitals, DeathCause } from './SurvivalSystem';
 /** Survivor data and deterministic rules. No Phaser, DOM or farm-state dependencies. */
 export const WORLD = { tiles: 64, tileSize: 32, pixels: 2048, seed: 8026 } as const;
 export const SPAWN = { x: 1040, y: 1136 };
 export const INTERACTION_RADIUS = 48;
 export const PLAYER_SPEED = 150;
-export type ResourceKind = 'wood' | 'metal' | 'water';
+export type ResourceKind = 'wood' | 'metal' | 'water' | 'food';
 export type Resources = Record<ResourceKind, number>;
 export type ObjectKind = ResourceKind | 'rock' | 'shelter';
 export interface Point { x: number; y: number }
 export interface WorldObject extends Point { id: string; kind: ObjectKind; width: number; height: number }
 export interface SurvivorState {
-  version: 1; seed: number; player: Point; resources: Resources; collected: string[]; returned: boolean;
+  waterOrigin?: 0; schemaVersion: 2; vitals: Vitals; clock: ClockState; consumed: {food: number; water: number}; deathCause: DeathCause | null; seed: number; player: Point; resources: Resources; collected: string[]; returned: boolean;
 }
 export const RESOURCE_DATA: Record<ResourceKind, { label: string; amount: number; color: string }> = {
+  food: { label: 'Еда', amount: 1, color: '#c8b67d' },
   wood: { label: 'Дерево', amount: 3, color: '#bca47c' },
   metal: { label: 'Металл', amount: 2, color: '#aeb8b8' },
   water: { label: 'Вода', amount: 1, color: '#7db8be' },
 };
 export function createSurvivor(): SurvivorState {
-  return { version: 1, seed: WORLD.seed, player: { ...SPAWN }, resources: { wood: 0, metal: 0, water: 0 }, collected: [], returned: false };
+  return { schemaVersion: 2, seed: WORLD.seed, player: { ...SPAWN }, resources: { wood: 0, metal: 0, water: BALANCE.initialWater, food: BALANCE.initialFood }, collected: [], returned: false, vitals: { health: 100, hunger: 100, thirst: 100 }, clock: { day: 1, minuteOfDay: BALANCE.startMinute }, consumed: {food: 0, water: 0}, deathCause: null };
 }
 export function movement(x: number, y: number) {
   const length = Math.hypot(x, y);
@@ -40,23 +44,10 @@ export function makeObjects(seed: number = WORLD.seed): WorldObject[] {
     const kind: ObjectKind = r < .035 ? 'wood' : r < .065 ? 'rock' : r < .09 ? 'metal' : 'water';
     objects.push({ id: `node-${x}-${y}`, kind, x: x * 32 + 16, y: y * 32 + 16, width: kind === 'rock' ? 28 : 24, height: kind === 'wood' ? 26 : 24 });
   }
+  for (const [i, [x, y]] of [[30,37],[36,36],[29,32],[34,30],[36,39]].entries()) objects.push({id: `food-${i}`, kind: 'food', x: x * 32 + 16, y: y * 32 + 16, width: 22, height: 22});
   return objects;
 }
 export function blocked(point: Point, objects: WorldObject[], radius = 8) {
   return point.x < radius || point.y < radius || point.x > WORLD.pixels - radius || point.y > WORLD.pixels - radius || objects.some(o => Math.abs(point.x - o.x) < o.width / 2 + radius && Math.abs(point.y - o.y) < o.height / 2 + radius);
 }
-const SAVE_KEY = 'avtonomiya-survivor-v1';
-export function saveSurvivor(state: SurvivorState, storage: Pick<Storage, 'setItem'> = localStorage) {
-  storage.setItem(SAVE_KEY, JSON.stringify(state));
-}
-export function loadSurvivor(storage: Pick<Storage, 'getItem'> = localStorage): SurvivorState | null {
-  const raw = storage.getItem(SAVE_KEY); if (raw === null) return null;
-  const s = JSON.parse(raw) as SurvivorState;
-  const objects = makeObjects();
-  const ids = new Set(objects.filter(o => o.kind !== 'shelter' && o.kind !== 'rock').map(o => o.id));
-  if (!s || s.version !== 1 || s.seed !== WORLD.seed || !s.player || !Number.isFinite(s.player.x) || !Number.isFinite(s.player.y) || !s.resources || Object.keys(RESOURCE_DATA).some(k => !Number.isSafeInteger(s.resources[k as ResourceKind]) || s.resources[k as ResourceKind] < 0) || !Array.isArray(s.collected) || s.collected.some(id => !ids.has(id)) || new Set(s.collected).size !== s.collected.length || typeof s.returned !== 'boolean') throw new Error('Некорректное сохранение выжившего');
-  const expected: Resources = { wood: 0, metal: 0, water: 0 };
-  for (const o of objects) if (s.collected.includes(o.id)) expected[o.kind as ResourceKind] += RESOURCE_DATA[o.kind as ResourceKind].amount;
-  if (Object.keys(expected).some(k => expected[k as ResourceKind] !== s.resources[k as ResourceKind]) || (s.returned && !hasSupplies(s)) || blocked(s.player, objects.filter(o => !s.collected.includes(o.id)))) throw new Error('Неверные ресурсы или положение');
-  return s;
-}
+export { saveSurvivor, loadSurvivor } from './SaveSystem';

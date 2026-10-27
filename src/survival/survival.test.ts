@@ -25,7 +25,7 @@ test('resources grant correct amounts once, shelter completes only after supplie
   const s = createSurvivor(), objects = makeObjects(), system = new InteractionSystem(s,objects);
   assert.equal(system.interact(objects[0])?.message,'Убежище. Здесь можно отдохнуть'); assert.equal(s.returned,false);
   for (const o of objects.slice(1,4)) { system.interact(o); assert.equal(system.interact(o),null); }
-  assert.deepEqual(s.resources,{wood:3,metal:2,water:1}); assert.equal(s.collected.length,3);
+  assert.deepEqual(s.resources,{wood:3,metal:2,water:3,food:3}); assert.equal(s.collected.length,3);
   system.interact(objects[0]); assert.equal(s.returned,true);
 });
 test('save is isolated from farm keys, roundtrips, rejects corrupt / incompatible / colliding state', () => {
@@ -33,9 +33,9 @@ test('save is isolated from farm keys, roundtrips, rejects corrupt / incompatibl
   const storage = {setItem:(k:string,v:string)=>{values.set(k,v);},getItem:(k:string)=>values.get(k)??null};
   const interactions = new InteractionSystem(s,makeObjects()); interactions.interact(makeObjects()[1]);
   saveSurvivor(s,storage); assert.deepEqual(loadSurvivor(storage),s); assert.equal(values.get('avtonomiya-v1'),'untouched farm');
-  const before = values.get('avtonomiya-survivor-v1');
-  for (const bad of [{...s,version:2},{...s,resources:{...s.resources,wood:-1}},{...s,collected:['unknown']},{...s,player:makeObjects()[0]},{...s,resources:{...s.resources,wood:999}}]) {
-    values.set('avtonomiya-survivor-v1',JSON.stringify(bad)); assert.throws(()=>loadSurvivor(storage));
+  const before = values.get('avtonomiya-survivor-v2');
+  for (const bad of [{...s,schemaVersion:99},{...s,resources:{...s.resources,wood:-1}},{...s,collected:['unknown']},{...s,player:makeObjects()[0]},{...s,resources:{...s.resources,wood:999}}]) {
+    values.set('avtonomiya-survivor-v2',JSON.stringify(bad)); assert.throws(()=>loadSurvivor(storage));
   }
-  values.set('avtonomiya-survivor-v1',before!); assert.deepEqual(loadSurvivor(storage),s);
+  values.set('avtonomiya-survivor-v2',before!); assert.deepEqual(loadSurvivor(storage),s);
 });

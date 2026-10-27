@@ -19,6 +19,10 @@ export function createTextures(scene: Phaser.Scene) {
     rect(0x252e2c, 3, 3, 11, 12); rect(0x4e787b, 4, 2, 8, 11); rect(0x80b2ac, 5, 2, 6, 2);
     rect(0x354f50, 4, 6, 8, 2); rect(0x354f50, 4, 11, 8, 2); rect(0xadc2a5, 6, 4, 2, 2); rect(0x2c4446, 9, 3, 2, 1);
   });
+  texture('survivor-food', 16, () => {
+    rect(0x292e24, 2, 3, 12, 12); rect(0x9f8e59, 3, 2, 10, 11); rect(0xc7b780, 4, 3, 8, 2);
+    rect(0x57684e, 4, 6, 8, 5); rect(0xc3c99b, 7, 6, 2, 5); rect(0xc3c99b, 5, 8, 6, 1);
+  });
   texture('survivor-rock', 16, () => {
     rect(0x272e2c, 1, 6, 14, 9); rect(0x666e64, 2, 4, 12, 9); rect(0x8a9180, 4, 2, 7, 4);
     rect(0x454f4b, 10, 6, 4, 6); rect(0xa0a391, 5, 3, 4, 2); rect(0x48534a, 3, 11, 7, 2);
