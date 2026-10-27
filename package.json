@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite --host 0.0.0.0",
     "build": "tsc --noEmit && vite build",
-    "test": "tsx --test src/simulation.test.ts",
+    "test": "tsx --test src/simulation.test.ts src/survival/survival.test.ts",
     "preview": "vite preview --host 0.0.0.0"
   },
   "dependencies": {
